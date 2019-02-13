@@ -1,7 +1,8 @@
 import os
 import time
 from elasticsearch import Elasticsearch
-from elasticsearch.exceptions import ConnectionError, TransportError, ConflictError
+from elasticsearch.helpers import bulk
+from elasticsearch.exceptions import ConnectionError, TransportError, ConflictError, BulkIndexError
 from elasticsearch_dsl import connections
 from elasticsearch_dsl.wrappers import Range
 
@@ -17,7 +18,7 @@ class ESConnection():
         self.index = os.environ['ES_INDEX']
         self.client = None
         self.work = None
-        self.tries = 0
+        self.batch = []
 
         self.createElasticConnection()
         self.createIndex()
@@ -39,8 +40,16 @@ class ESConnection():
             Work.init()
         else:
             logger.info('ElasticSearch index {} already exists'.format(self.index))
+    
+    def processBatch(self):
+        try:
+            bulk(self.client, (d.to_dict(True) for d in self.batch), chunk_size=50)
+        except BulkIndexError as err:
+            logger.error('Unable to process batch of records')
+            logger.debug(err)
+            raise ESError('Bulk indexing Error recieved!')
 
-    def indexRecord(self, dbRec):
+    def createRecord(self, dbRec):
         logger.debug('Indexing record {}'.format(dbRec))
         try:
             self.work = Work.get(id=dbRec.uuid)
@@ -96,18 +105,19 @@ class ESConnection():
         for instance in dbRec.instances:
             ESConnection.addInstance(self.work, instance)
         
-        try:
-            self.work.save()
-        except ConflictError as err:
-            logger.warning('Found more recent version of document in index (greater than {}'.format(self.work.meta.version))
-            logger.debug(err)
-            if self.tries < 3:
-                logger.info('Backing off, then retrying to index')
-                time.sleep(3)
-                self.tries += 1
-                self.indexRecord(dbRec)
-            else:
-                logger.debug('Too many tries attempted, abandoning version {} of record {}'.format(self.work.meta.version, self.work.uuid))
+        self.batch.append(self.work)
+        #try:
+        #    self.work.save()
+        #except ConflictError as err:
+        #    logger.warning('Found more recent version of document in index (greater than {}'.format(self.work.meta.version))
+        #    logger.debug(err)
+        #    if self.tries < 3:
+        #        logger.info('Backing off, then retrying to index')
+        #        time.sleep(3)
+        #        self.tries += 1
+        #        self.indexRecord(dbRec)
+        #    else:
+        #        logger.debug('Too many tries attempted, abandoning version {} of record {}'.format(self.work.meta.version, self.work.uuid))
 
     @staticmethod
     def addIdentifier(record, identifier):

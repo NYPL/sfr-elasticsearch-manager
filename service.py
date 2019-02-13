@@ -48,11 +48,19 @@ def parseRecords(records):
     """Iterator for handling multiple incoming messages"""
     logger.debug('Parsing Messages')
     es = ESConnection()
+    session = createSession(engine)
     try:
-        return [parseRecord(r, es) for r in records]
+        for r in records:
+            parseRecord(r, es)
     except (NoRecordsReceived, DataError, DBError) as err:
         logger.error('Could not process records in current invocation')
         logger.debug(err)
+    
+    logger.info('Bulk processing index records')
+    es.processBatch()
+
+    logger.debug('Closing Session')
+    session.close()
 
 
 def parseRecord(encodedRec, es):
@@ -74,17 +82,13 @@ def parseRecord(encodedRec, es):
         logger.debug(err)
         raise DataError('Body object missing from SQS message')
 
-    session = createSession(engine)
-
     try:
         logger.debug('Retrieving/Storing record {} ({})'.format(
             recordID,
             recordType
         ))
-        dbRec = retrieveRecord(session, recordType, recordID)
+        createRecord(session, recordType, recordID)
         logger.info('Indexing record {}'.format(dbRec))
-        es.tries = 0
-        indexResult = es.indexRecord(dbRec)
     except Exception as err:  # noqa: Q000
         # There are a large number of SQLAlchemy errors that can be thrown
         # These should be handled elsewhere, but this should catch anything
@@ -97,7 +101,3 @@ def parseRecord(encodedRec, es):
             'unknown',
             'Unable to parse/ingest record, see logs for error'
         )
-    finally:
-        logger.debug('Closing Session')
-        session.close()
-    return indexResult
