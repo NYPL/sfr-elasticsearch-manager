@@ -1,8 +1,8 @@
 import os
 import time
 from elasticsearch import Elasticsearch
-from elasticsearch.helpers import bulk
-from elasticsearch.exceptions import ConnectionError, TransportError, ConflictError, BulkIndexError
+from elasticsearch.helpers import bulk, BulkIndexError
+from elasticsearch.exceptions import ConnectionError, TransportError, ConflictError
 from elasticsearch_dsl import connections
 from elasticsearch_dsl.wrappers import Range
 

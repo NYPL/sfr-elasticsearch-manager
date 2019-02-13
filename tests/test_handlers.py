@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch, call
+from unittest.mock import patch, call, MagicMock
 import os
 
 from helpers.errorHelpers import NoRecordsReceived, DataError, DBError
@@ -48,47 +48,61 @@ class TestHandler(unittest.TestCase):
         with self.assertRaises(NoRecordsReceived):
             handler(testRec, None)
 
-    @patch('service.ESConnection', return_value='esMock')
+   
+    sesh = MagicMock()
+    @patch('service.ESConnection')
     @patch('service.parseRecord', return_value=True)
-    def test_parse_records_success(self, mock_parse, mock_es):
+    @patch('service.createSession', return_value=sesh)
+    def test_parse_records_success(self, mock_sesh, mock_parse, mock_es):
+        es_mock = MagicMock(name='es_test')
+        es_mock.processBatch.return_value = True
+        mock_es.return_value = es_mock
         testRecords = ['rec1', 'rec2']
         res = parseRecords(testRecords)
-        mock_parse.assert_has_calls([call('rec1', 'esMock'), call('rec2', 'esMock')])
-        self.assertEqual(res, [True, True])
+        mock_parse.assert_has_calls([
+            call('rec1', es_mock, TestHandler.sesh),
+            call('rec2', es_mock, TestHandler.sesh)
+        ])
+        es_mock.processBatch.assert_called_once()
+        TestHandler.sesh.close.assert_called_once()
 
-    @patch('service.ESConnection', return_value='esMock')
+    @patch('service.ESConnection')
     @patch('service.parseRecord', side_effect=DataError('test error'))
     def test_parse_records_err(self, mock_parse, mock_es):
+        es_mock = MagicMock(name='es_test')
+        es_mock.processBatch.return_value = True
+        mock_es.return_value = es_mock
         testRecord = ['badRecord']
         res = parseRecords(testRecord)
         self.assertEqual(res, None)
 
     @patch('service.ESConnection')
     @patch('service.retrieveRecord')
-    @patch('service.createSession')
-    def test_parse_record_success(self, mock_session, mock_index, mock_es):
+    def test_parse_record_success(self, mock_index, mock_es):
         testJSON = {
             'body': '{"type": "work", "identifier": "a3800805fa64454095c459400c424271"}'
         }
-        mock_es.indexRecord.return_value = True
-        res = parseRecord(testJSON, mock_es)
-        mock_session.assert_called_once()
+        mock_es.createRecord.return_value = True
+        mock_sesh = MagicMock()
+        mock_sesh.rollback.return_value = True
+        parseRecord(testJSON, mock_es, mock_sesh)
         mock_index.assert_called_once()
-        self.assertTrue(res)
+        mock_es.createRecord.assert_called_once()
+        
 
     def test_parse_bad_json(self):
         badJSON = {
             'body': '{"type: "work", "identifier": "a3800805fa64454095c459400c424271"}'
         }
         with self.assertRaises(DataError):
-            parseRecord(badJSON, 'mockES')
+            parseRecord(badJSON, 'mockES', 'session')
 
     def test_parse_missing_field(self):
         missingJSON = {
             'body': '{"type": "work"}'
         }
         with self.assertRaises(DataError):
-            parseRecord(missingJSON, 'mockES')
+            parseRecord(missingJSON, 'mockES', 'session')
 
     @patch('service.retrieveRecord', side_effect=DBError('work', 'Test Error'))
     @patch('service.createSession')
@@ -96,8 +110,10 @@ class TestHandler(unittest.TestCase):
         testJSON = {
             'body': '{"type": "work", "identifier": "a3800805fa64454095c459400c424271"}'
         }
+        mock_sesh = MagicMock()
+        mock_sesh.rollback.return_value = True
         with self.assertRaises(DBError):
-            parseRecord(testJSON, 'mockES')
+            parseRecord(testJSON, 'mockES', mock_sesh)
             mock_session.assert_called_once()
             mock_index.assert_called_once()
 

@@ -120,7 +120,7 @@ class TestESManager(unittest.TestCase):
         }
 
 
-        inst.indexRecord(testRec)
+        inst.createRecord(testRec)
         
         self.assertEqual(inst.work.uuid, 'test_uuid')
         self.assertEqual(inst.work.test_date_display, '2018')
@@ -145,48 +145,11 @@ class TestESManager(unittest.TestCase):
         
         mock_work.get.return_value = existingRec
 
-        inst.indexRecord(testRec)
+        inst.createRecord(testRec)
         
         self.assertEqual(inst.work.uuid, 'test_uuid')
         self.assertEqual(inst.work.title, 'Test Title')
-    
-    @patch.dict('os.environ', {'ES_HOST': 'test', 'ES_PORT': '9200', 'ES_TIMEOUT': '60'})
-    @patch('lib.esManager.Work')
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_index_retry(self, mock_client, mock_work):
-        inst = ESConnection()
-        testRec = MagicMock(
-            uuid='test_uuid',
-            title='Test Title'
-        )
-        
-        mock_work.get.side_effect = TransportError
-
-        testRec.save.side_effect = [ConflictError, True]
-        with patch('lib.esManager.time.sleep'):
-            inst.indexRecord(testRec)
-        
-        self.assertEqual(inst.work.uuid, 'test_uuid')
-        self.assertEqual(inst.work.title, 'Test Title')
-        self.assertEqual(inst.tries, 1)
-    
-    @patch.dict('os.environ', {'ES_HOST': 'test', 'ES_PORT': '9200', 'ES_TIMEOUT': '60'})
-    @patch('lib.esManager.Work')
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_index_failure(self, mock_client, mock_work):
-        inst = ESConnection()
-        testRec = MagicMock(
-            uuid='test_uuid',
-            title='Test Title'
-        )
-        
-        mock_work.get.side_effect = TransportError
-
-        testRec.save.side_effect = ConflictError
-        with patch('lib.esManager.time.sleep'):
-            inst.indexRecord(testRec)
-        
-        self.assertEqual(inst.tries, 3)
+        self.assertEqual(inst.batch[0].uuid, 'test_uuid')
     
     def test_add_identifier(self):
         testRec = MagicMock(identifiers=[])

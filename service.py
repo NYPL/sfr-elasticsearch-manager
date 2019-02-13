@@ -51,7 +51,8 @@ def parseRecords(records):
     session = createSession(engine)
     try:
         for r in records:
-            parseRecord(r, es)
+            parseRecord(r, es, session)
+
     except (NoRecordsReceived, DataError, DBError) as err:
         logger.error('Could not process records in current invocation')
         logger.debug(err)
@@ -63,7 +64,7 @@ def parseRecords(records):
     session.close()
 
 
-def parseRecord(encodedRec, es):
+def parseRecord(encodedRec, es, session):
     """Handles each individual record by parsing JSON the message string
     received in the SQS queue. Each message should contain a record type
     indicator along with an identifier for that record type. These fields are
@@ -87,8 +88,9 @@ def parseRecord(encodedRec, es):
             recordID,
             recordType
         ))
-        createRecord(session, recordType, recordID)
-        logger.info('Indexing record {}'.format(dbRec))
+        dbRec = retrieveRecord(session, recordType, recordID)
+        es.createRecord(dbRec)
+        logger.info('Indexing record {}'.format(es.work))
     except Exception as err:  # noqa: Q000
         # There are a large number of SQLAlchemy errors that can be thrown
         # These should be handled elsewhere, but this should catch anything

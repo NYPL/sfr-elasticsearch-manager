@@ -7,6 +7,7 @@ from sqlalchemy import (
     String,
     Unicode,
     DateTime,
+    PrimaryKeyConstraint
 )
 
 from sqlalchemy.orm import relationship, backref
@@ -293,8 +294,20 @@ class AgentItems(Core, Base):
     agent_id = Column(Integer, ForeignKey('agents.id'), primary_key=True)
     role = Column(String(64))
 
+    agentItemPkey = PrimaryKeyConstraint('item_id', 'agent_id', 'role', name='agent_items_pkey')
+
     item = relationship(
         Item,
         backref=backref('agent_items', cascade='all, delete-orphan')
     )
-    agent = relationship('Agent')
+    agent = relationship(
+        'Agent',
+        backref=backref('agent_items')
+    )
+
+    def __repr__(self):
+        return '<AgentItems(item={}, agent={}, role={})>'.format(
+            self.item_id,
+            self.agent_id,
+            self.role
+        )
