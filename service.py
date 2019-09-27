@@ -5,7 +5,7 @@ from sfrCore import SessionManager
 
 from helpers.errorHelpers import NoRecordsReceived, DataError, DBError, ESError
 from helpers.logHelpers import createLog
-from lib.esManager import ESConnection
+from lib.esManager import IndexingManager
 
 """Logger can be passed name of current module
 Can also be instantiated on a class/method basis using dot notation
@@ -47,13 +47,13 @@ def indexRecords():
     model.
     """
     logger.info('Creating connection to ElasticSearch index')
-    es = ESConnection()
+    indexer = IndexingManager()
 
     logger.info('Creating postgresql session')
     session = MANAGER.createSession()
 
     logger.info('Loading recently updated records')
-    es.generateRecords(session)
+    indexer.loadUpdates(session)
 
     logger.info('Close postgresql session')
     MANAGER.closeConnection()
