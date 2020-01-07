@@ -15,7 +15,7 @@ os.environ['ES_INDEX'] = 'test'
 # us to re-use db connections across Lambda invocations, but it requires a
 # little testing weirdness, e.g. we need to mock it on import to prevent errors
 with patch('service.SessionManager') as mock_db:
-    from service import handler, indexRecords
+    from service import handler, indexRecords, IndexingManager
 
 
 class TestHandler(unittest.TestCase):
@@ -29,8 +29,9 @@ class TestHandler(unittest.TestCase):
         mock_index.assert_called_once()
         self.assertTrue(resp)
 
-    def test_parse_records_success(self):
-        mock_es = MagicMock()
-        with patch('service.ESConnection', return_value=mock_es) as mock_conn:
-            indexRecords()
-            mock_es.generateRecords.assert_called_once()
+    @patch.object(IndexingManager, 'loadUpdates')
+    @patch('lib.esManager.createAWSClient')
+    def test_parse_records_success(self, mockUpdates, mockClient):
+        indexRecords()
+        mockClient.assert_called_once()
+        mockUpdates.assert_called_once()

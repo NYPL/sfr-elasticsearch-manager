@@ -1,197 +1,73 @@
-import unittest
+import json
 import os
-from unittest.mock import patch, MagicMock, call
-from elasticsearch.exceptions import ConnectionError, TransportError, ConflictError
-from elasticsearch.helpers import BulkIndexError
-from elasticsearch_dsl import DateRange
+import unittest
+from unittest.mock import patch, MagicMock, call, DEFAULT
 
-from helpers.errorHelpers import ESError
+os.environ['INDEX_QUEUE'] = 'sqs_test'
 
-os.environ['ES_INDEX'] = 'test'
+from lib.esManager import IndexingManager
+from helpers.errorHelpers import OutputError
 
-from lib.esManager import ESConnection, ESDoc
-from helpers.errorHelpers import ESError
 
-@patch.dict('os.environ', {'ES_HOST': 'test', 'ES_PORT': '9200', 'ES_TIMEOUT': '60'})
 class TestESManager(unittest.TestCase):
-    @patch('lib.esManager.ESConnection.createElasticConnection')
-    @patch('lib.esManager.ESConnection.createIndex')
-    def test_class_create(self, mock_index, mock_connection):
-        inst = ESConnection()
-        self.assertIsInstance(inst, ESConnection)
-        self.assertEqual(inst.index, 'test')
-    
-    @patch('lib.esManager.Elasticsearch', return_value='default')
-    @patch('lib.esManager.ESConnection')
-    @patch('lib.esManager.ESConnection.createIndex')
-    def test_connection_create(self, mock_index, mock_instance, mock_elastic):
-        inst = ESConnection()
-        self.assertEqual(inst.client, 'default')
-    
-    client_mock = MagicMock(name='test_client')
-    client_mock.indices.exists.return_value = False
+    @patch('lib.esManager.createAWSClient')
+    def test_class_create(self, mockClient):
+        mockClient.return_value = 'mockSQS'
+        inst = IndexingManager()
+        self.assertIsInstance(inst, IndexingManager)
+        self.assertEqual(inst.messages, [])
+        self.assertEqual(inst.sqsClient, 'mockSQS')
 
-    @patch('lib.esManager.Elasticsearch', side_effect=ConnectionError)
-    @patch('lib.esManager.ESConnection')
-    @patch('lib.esManager.ESConnection.createIndex')
-    def test_connection_err(self, mock_index, mock_instance, mock_elastic):
-        with self.assertRaises(ESError):
-            inst = ESConnection()
-        
-    @patch('lib.esManager.Work')
-    @patch('lib.esManager.ESConnection')
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_index_create(self, mock_elastic, mock_instance, mock_work):
-        
-        inst = ESConnection()
-        self.assertIsInstance(inst.client, MagicMock)
-        mock_work.init.assert_called_once()
-    
-    client_mock = MagicMock(name='test_client')
-    client_mock.indices.exists.return_value = True
+    @patch('lib.esManager.createAWSClient')
+    @patch('lib.esManager.retrieveRecords', return_value=[i for i in range(15)])
+    @patch.multiple(IndexingManager, addMessage=DEFAULT, sendMessages=DEFAULT)
+    def test_loadUpdates(self, mockRetrieve, mockClient, addMessage, sendMessages):
+        testManager = IndexingManager()
 
-    @patch('lib.esManager.Work')
-    @patch('lib.esManager.ESConnection')
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_index_exists(self, mock_elastic, mock_instance, mock_work):
-        
-        inst = ESConnection()
-        self.assertIsInstance(inst.client, MagicMock)
-        mock_work.init.assert_not_called()
-    
-    @patch('lib.esManager.streaming_bulk', return_value=iter([(True, 1)]))
-    @patch('lib.esManager.ESConnection.process', side_effect=[1])
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_generate_success(self, mock_elastic, mock_process, mock_stream):
-        inst = ESConnection()
-        inst.generateRecords('session')
-        mock_stream.assert_has_calls([call(TestESManager.client_mock, 1)])
-    
-    @patch('lib.esManager.streaming_bulk', return_value=iter([(False, 1)]))
-    @patch('lib.esManager.ESConnection.process', side_effect=[1])
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_generate_failure(self, mock_elastic, mock_process, mock_stream):
-        inst = ESConnection()
-        inst.generateRecords('session')
-        mock_stream.assert_has_calls([call(TestESManager.client_mock, 1)])
-    
-    @patch('lib.esManager.streaming_bulk', side_effect=BulkIndexError)
-    @patch('lib.esManager.ESConnection.process', side_effect=[1])
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_generate_error(self, mock_elastic, mock_process, mock_stream):
-        inst = ESConnection()
-        try:
-            inst.generateRecords('session')
-        except ESError:
-            pass
-        self.assertRaises(ESError)
+        def addMessageEffect(*args):
+            testManager.messages.append(0)
+        addMessage.side_effect = addMessageEffect
 
-    @patch('lib.esManager.retrieveRecords')
-    @patch('lib.esManager.ESDoc.indexWork')
-    @patch('lib.esManager.Elasticsearch', return_value=client_mock)
-    def test_process(self, mock_elastic, mock_index, mock_retrieve):
-        mock_retrieve.return_value = ['work1', 'work2', 'work3']
-        with patch('lib.esManager.ESDoc.createWork') as mock_create:
-            mock_dict = MagicMock()
-            mock_dict.to_dict.side_effect = ['work1', 'work2', 'work3']
-            mock_create.return_value = mock_dict
-            inst = ESConnection()
-            res = list(inst.process('session'))
-            self.assertEqual(res, ['work1', 'work2', 'work3'])
+        testManager.loadUpdates('session')
+
+        mockRetrieve.assert_called_once_with('session')
+        self.assertEqual(len(addMessage.mock_calls), 15)
+        sendMessages.assert_has_calls([call(), call()])
     
-    @patch('lib.esManager.ESDoc.createWork', return_value='testWork')
-    def test_init_esdoc(self, mock_create):
-        newDoc = ESDoc(('work1',), 'session')
-        self.assertEqual(newDoc.workID, 'work1')
-        self.assertEqual(newDoc.session, 'session')
-        self.assertEqual(newDoc.dbRec, None)
-        self.assertEqual(newDoc.work, 'testWork')
+    @patch('lib.esManager.createAWSClient')
+    def test_addMessage(self, mockClient):
+        testManager = IndexingManager()
+        mockWork = MagicMock()
+        mockUUID = MagicMock()
+        mockUUID.hex = 'xxxx-xxxxxx-xxxx-xxxxxxx'
+        mockWork.uuid = mockUUID
+
+        testManager.addMessage(mockWork)
+        self.assertEqual(len(testManager.messages), 1)
+        testMessage = testManager.messages[0]
+        self.assertEqual(testMessage['Id'], 'xxxx-xxxxxx-xxxx-xxxxxxx')
+        jsonVal = json.loads(testMessage['MessageBody'])
+        self.assertEqual(jsonVal['type'], 'uuid')
+        self.assertEqual(jsonVal['identifier'], 'xxxx-xxxxxx-xxxx-xxxxxxx')
+
+    @patch('lib.esManager.createAWSClient')
+    def test_sendMessages(self, mockClient):
+        mockSQS = MagicMock()
+        mockClient.return_value = mockSQS
+        testManager = IndexingManager()
+        testManager.messages = [1, 2, 3]
+        testManager.sendMessages()
+
+        mockSQS.send_message_batch.assert_called_once_with(
+            QueueUrl='sqs_test',
+            Entries=[1, 2, 3]
+        )
     
-    @patch('lib.esManager.Work', return_value={'title': 'test', 'uuid': '000'})
-    def test_create_es_work(self, mock_work):
-        mock_session = MagicMock()
-        mock_session.query.return_value.get.return_value = TestDict(uuid=0)
-        testDoc = ESDoc(('1',), mock_session)
-        newWork = testDoc.createWork()
-        self.assertEqual(testDoc.dbRec.uuid, 0)
-        self.assertEqual(newWork, {'title': 'test', 'uuid': '000'})
-
-    def test_add_identifier(self):
-        testID = TestDict(**{
-            'type': None,
-            'generic': [
-                TestDict(**{
-                    'value': 'hello'
-                })
-            ]
-        })
-
-        idRec = ESDoc.addIdentifier(testID)
-        self.assertEqual(idRec.id_type, 'generic')
-        self.assertEqual(idRec.identifier, 'hello')
-    
-    def test_add_link(self):
-        testLink = TestDict(**{
-            'url': 'test/url',
-            'media_type': 'test',
-            'flags': '{\"local\": false}',
-            'id': 1
-        })
-
-        linkRec = ESDoc.addLink(testLink)
-        self.assertEqual(linkRec.url, 'test/url')
-        self.assertEqual(linkRec.media_type, 'test')
-        self.assertEqual(linkRec.local, False)
-    
-    def test_add_measure(self):
-        testMeasure = TestDict(**{
-            'quantity': 'test',
-            'value': 1,
-        })
-
-        measureRec = ESDoc.addMeasurement(testMeasure)
-        self.assertEqual(measureRec.quantity, 'test')
-        self.assertEqual(measureRec.value, 1)
-    
-    def test_add_language(self):
-        testLang = TestDict(**{
-            'language': 'test',
-            'iso_2': 'te',
-            'iso_3': 'tes'
-        })
-
-        langRec = ESDoc.addLanguage(testLang)
-        self.assertEqual(langRec.language, 'test')
-        self.assertEqual(langRec.iso_3, 'tes')
-    
-    def test_insert_instance_w_pub_date(self):
-        testInstance = MagicMock()
-        testDate = MagicMock()
-        testDate.lower = '2019-01-01'
-        testDate.upper = '2019-12-31'
-        dateObj = MagicMock()
-        dateObj.date_type = 'pub_date'
-        dateObj.display_date = '2019'
-        dateObj.date_range = testDate
-        testInstance.title = 'Test Title'
-        testInstance.dates = [dateObj]
-        newInstance = ESDoc.addInstance(testInstance)
-
-        self.assertEqual(newInstance.title, 'Test Title')
-        self.assertEqual(newInstance.pub_date_sort, '2019-01-01')
-        self.assertEqual(newInstance.pub_date_sort_desc, '2019-12-31')
-
-
-
-class TestDict(dict):
-
-    def __init__(self, *args, **kwargs):
-        super(TestDict, self).__init__(*args, **kwargs)
-        self.__dict__ = self
-        self.fields = kwargs.keys()
-    
-    def __dir__(self):
-        return self.fields
-    
-    def to_dict(self, bool):
-        return vars(self)
+    @patch('lib.esManager.createAWSClient')
+    def test_sendMessages_err(self, mockClient):
+        mockSQS = MagicMock()
+        mockClient.return_value = mockSQS
+        mockSQS.send_message_batch.side_effect = IndexError
+        testManager = IndexingManager()
+        with self.assertRaises(OutputError):
+            testManager.sendMessages()
